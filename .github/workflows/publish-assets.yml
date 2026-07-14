@@ -80,7 +80,9 @@ jobs:
           const { readdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');
           const path = require('node:path');
           const packageModel = (root, model) => {
-            const names = readdirSync(root).sort();
+            const names = readdirSync(root)
+              .filter((name) => statSync(path.join(root, name)).isFile())
+              .sort();
             const files = names.map((name) => {
               const fullPath = path.join(root, name);
               return {
