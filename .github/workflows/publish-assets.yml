@@ -1,0 +1,105 @@
+name: Build and publish Sherpa Korean assets
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: sherpa-ko-assets-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.23
+
+      - name: Build a single-threaded runtime and package model assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p vendor public/runtime public/model
+
+          git clone --depth 1 --branch v1.13.4 https://github.com/k2-fsa/sherpa-onnx.git vendor/sherpa-onnx
+          curl --fail --location --retry 3 --output vendor/model.tar.bz2 \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-korean-2024-06-16.tar.bz2
+          tar -xjf vendor/model.tar.bz2 -C vendor
+
+          model_dir=vendor/sherpa-onnx-streaming-zipformer-korean-2024-06-16
+          assets_dir=vendor/sherpa-onnx/wasm/asr/assets
+          mkdir -p "$assets_dir"
+          cp "$model_dir/encoder-epoch-99-avg-1.int8.onnx" "$assets_dir/encoder.onnx"
+          cp "$model_dir/decoder-epoch-99-avg-1.onnx" "$assets_dir/decoder.onnx"
+          cp "$model_dir/joiner-epoch-99-avg-1.int8.onnx" "$assets_dir/joiner.onnx"
+          cp "$model_dir/tokens.txt" "$assets_dir/tokens.txt"
+          cp "$model_dir/bpe.model" "$assets_dir/bpe.model"
+
+          cmake_file=vendor/sherpa-onnx/wasm/asr/CMakeLists.txt
+          sed -i '/-pthread -sPTHREAD_POOL_SIZE=4/d' "$cmake_file"
+          sed -i '/--preload-file.*assets@\./d' "$cmake_file"
+          sed -i "s/'HEAPF64'/'HEAPF64','FS'/" "$cmake_file"
+
+          cd vendor/sherpa-onnx
+          ./build-wasm-simd-asr.sh
+          cd ../..
+
+          runtime_dir=vendor/sherpa-onnx/build-wasm-simd-asr/install/bin/wasm/asr
+          cp "$runtime_dir/sherpa-onnx-asr.js" public/runtime/
+          cp "$runtime_dir/sherpa-onnx-wasm-main-asr.js" public/runtime/
+          cp "$runtime_dir/sherpa-onnx-wasm-main-asr.wasm" public/runtime/
+
+          split -b 80m "$assets_dir/encoder.onnx" public/model/encoder.int8.onnx.part-
+          cp "$assets_dir/decoder.onnx" public/model/decoder.onnx
+          cp "$assets_dir/joiner.onnx" public/model/joiner.int8.onnx
+          cp "$assets_dir/tokens.txt" public/model/tokens.txt
+          cp "$assets_dir/bpe.model" public/model/bpe.model
+
+          node - <<'NODE'
+          const { createHash } = require('node:crypto');
+          const { readdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');
+          const path = require('node:path');
+          const root = 'public/model';
+          const names = readdirSync(root).sort();
+          const files = names.map((name) => {
+            const fullPath = path.join(root, name);
+            return {
+              name,
+              bytes: statSync(fullPath).size,
+              sha256: createHash('sha256').update(readFileSync(fullPath)).digest('hex'),
+            };
+          });
+          writeFileSync('public/manifest.json', JSON.stringify({
+            format: 1,
+            model: 'sherpa-onnx-streaming-zipformer-korean-2024-06-16',
+            runtime: 'single-threaded-wasm-simd',
+            files,
+          }, null, 2));
+          NODE
+
+          touch public/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
