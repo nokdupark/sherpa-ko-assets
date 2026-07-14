@@ -48,6 +48,7 @@ jobs:
           cmake_file=vendor/sherpa-onnx/wasm/asr/CMakeLists.txt
           sed -i '/-pthread -sPTHREAD_POOL_SIZE=4/d' "$cmake_file"
           sed -i '/--preload-file.*assets@\./d' "$cmake_file"
+          sed -i '/sherpa-onnx-wasm-main-asr.data/d' "$cmake_file"
           sed -i "s/'HEAPF64'/'HEAPF64','FS'/" "$cmake_file"
 
           cd vendor/sherpa-onnx
