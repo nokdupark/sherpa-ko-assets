@@ -1,4 +1,4 @@
-name: Build and publish Sherpa Korean assets
+name: Build and publish Sherpa ASR assets
 
 on:
   workflow_dispatch:
@@ -29,14 +29,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p vendor public/runtime public/model
+          mkdir -p vendor public/runtime public/model/en
 
           git clone --depth 1 --branch v1.13.4 https://github.com/k2-fsa/sherpa-onnx.git vendor/sherpa-onnx
           curl --fail --location --retry 3 --output vendor/model.tar.bz2 \
             https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-korean-2024-06-16.tar.bz2
+          curl --fail --location --retry 3 --output vendor/model-en.tar.bz2 \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2
           tar -xjf vendor/model.tar.bz2 -C vendor
+          tar -xjf vendor/model-en.tar.bz2 -C vendor
 
           model_dir=vendor/sherpa-onnx-streaming-zipformer-korean-2024-06-16
+          model_en_dir=vendor/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17
           assets_dir=vendor/sherpa-onnx/wasm/asr/assets
           mkdir -p "$assets_dir"
           cp "$model_dir/encoder-epoch-99-avg-1.int8.onnx" "$assets_dir/encoder.onnx"
@@ -66,26 +70,34 @@ jobs:
           cp "$assets_dir/tokens.txt" public/model/tokens.txt
           cp "$assets_dir/bpe.model" public/model/bpe.model
 
+          cp "$model_en_dir/encoder-epoch-99-avg-1.int8.onnx" public/model/en/encoder.int8.onnx
+          cp "$model_en_dir/decoder-epoch-99-avg-1.onnx" public/model/en/decoder.onnx
+          cp "$model_en_dir/joiner-epoch-99-avg-1.int8.onnx" public/model/en/joiner.int8.onnx
+          cp "$model_en_dir/tokens.txt" public/model/en/tokens.txt
+
           node - <<'NODE'
           const { createHash } = require('node:crypto');
           const { readdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');
           const path = require('node:path');
-          const root = 'public/model';
-          const names = readdirSync(root).sort();
-          const files = names.map((name) => {
-            const fullPath = path.join(root, name);
-            return {
-              name,
-              bytes: statSync(fullPath).size,
-              sha256: createHash('sha256').update(readFileSync(fullPath)).digest('hex'),
-            };
-          });
-          writeFileSync('public/manifest.json', JSON.stringify({
-            format: 1,
-            model: 'sherpa-onnx-streaming-zipformer-korean-2024-06-16',
-            runtime: 'single-threaded-wasm-simd',
-            files,
-          }, null, 2));
+          const packageModel = (root, model) => {
+            const names = readdirSync(root).sort();
+            const files = names.map((name) => {
+              const fullPath = path.join(root, name);
+              return {
+                name,
+                bytes: statSync(fullPath).size,
+                sha256: createHash('sha256').update(readFileSync(fullPath)).digest('hex'),
+              };
+            });
+            writeFileSync(path.join(root, 'manifest.json'), JSON.stringify({
+              format: 1,
+              model,
+              runtime: 'single-threaded-wasm-simd',
+              files,
+            }, null, 2));
+          };
+          packageModel('public/model', 'sherpa-onnx-streaming-zipformer-korean-2024-06-16');
+          packageModel('public/model/en', 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17');
           NODE
 
           touch public/.nojekyll
