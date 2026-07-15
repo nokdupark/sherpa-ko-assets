@@ -76,20 +76,34 @@ jobs:
           cp "$model_en_dir/tokens.txt" public/model/en/tokens.txt
 
           node - <<'NODE'
+          const { brotliCompressSync, constants } = require('node:zlib');
           const { createHash } = require('node:crypto');
           const { readdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');
           const path = require('node:path');
+
+          const compressBrotli = (fullPath) => {
+            const raw = readFileSync(fullPath);
+            const compressed = brotliCompressSync(raw, {
+              params: {
+                [constants.BROTLI_PARAM_QUALITY]: 11,
+              },
+            });
+            writeFileSync(`${fullPath}.br`, compressed);
+            return {
+              bytes: compressed.length,
+              sha256: createHash('sha256').update(raw).digest('hex'),
+            };
+          };
+
           const packageModel = (root, model) => {
             const names = readdirSync(root)
               .filter((name) => statSync(path.join(root, name)).isFile())
+              .filter((name) => !name.endsWith('.br'))
               .sort();
             const files = names.map((name) => {
               const fullPath = path.join(root, name);
-              return {
-                name,
-                bytes: statSync(fullPath).size,
-                sha256: createHash('sha256').update(readFileSync(fullPath)).digest('hex'),
-              };
+              const compressed = compressBrotli(fullPath);
+              return { name, ...compressed };
             });
             writeFileSync(path.join(root, 'manifest.json'), JSON.stringify({
               format: 1,
